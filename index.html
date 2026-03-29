@@ -164,6 +164,23 @@
             camera.position.lerp(new THREE.Vector3(player.position.x, player.position.y + 6, player.position.z + 10), 0.1);
             camera.lookAt(player.position);
             renderer.render(scene, camera);
+            // --- LOGIKA PERGERAKAN DENGAN SPEED ---
+if (moveData.x || moveData.y) {
+    // Tentukan kecepatan: jika ditarik jauh (sprint), speed naik
+    // Default: 0.15, Sprint: 0.35
+    const currentSpeed = (Math.abs(moveData.x) > 0.8 || Math.abs(moveData.y) > 0.8) ? 0.35 : 0.18;
+
+    player.position.x += moveData.x * currentSpeed;
+    player.position.z -= moveData.y * currentSpeed;
+    player.rotation.y = Math.atan2(moveData.x, moveData.y);
+
+    // Kirim posisi ke server agar player lain melihat kamu lari cepat
+    socket.emit('playerMovement', {
+        x: player.position.x,
+        z: player.position.z,
+        ry: player.rotation.y
+    });
+        }
         }
         animate();
 
