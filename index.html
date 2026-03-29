@@ -54,6 +54,177 @@
 
         // --- 3. LANTAI RAKSASA ---
         const loader = new THREE.TextureLoader();
+        const grassTexture = loader.load('https://files.catbox.moe/lbkbsp.jpeg');
+        grassTexture.wrapS = grassTexture.wrapT = THREE.RepeatWrapping;
+        grassTexture.repeat.set(200, 200); 
+
+        const floorGeo = new THREE.PlaneGeometry(200000, 200000);
+        const floorMat = new THREE.MeshStandardMaterial({ map: grassTexture });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // --- 4. KARAKTER & OBJEK ---
+        function createCharacter(color, name) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1.5, 0.6), new THREE.MeshStandardMaterial({ color: color }));
+            body.castShadow = true;
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ color: 0xffdbac }));
+            head.position.y = 1.1;
+            group.add(body, head);
+            return group;
+        }
+
+        const player = createCharacter(0x2196F3, "You");
+        player.position.y = 0.75;
+        scene.add(player);
+
+        for(let i=0; i<15; i++) {
+            const obstacle = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ color: 0xffaa00 }));
+            obstacle.position.set(Math.random()*100-50, 1, Math.random()*100-50);
+            obstacle.castShadow = true;
+            scene.add(obstacle);
+        }
+
+        const npcs = [];
+        for(let i=0; i<8; i++) {
+            const bot = createCharacter(0x666666, "NPC");
+            bot.position.set(Math.random()*40-20, 0.75, Math.random()*40-20);
+            bot.userData.targetPos = new THREE.Vector3(Math.random()*200-100, 0.75, Math.random()*200-100);
+            scene.add(bot);
+            npcs.push(bot);
+        }
+
+        // --- 5. INPUT LISTENERS ---
+        const joystick = nipplejs.create({ zone: document.getElementById('joystick-zone'), mode: 'static', position: {left: '60px', bottom: '60px'}, color: 'white' });
+        joystick.on('move', (e, d) => { moveData = { x: d.vector.x, y: d.vector.y }; });
+        joystick.on('end', () => { moveData = { x: 0, y: 0 }; });
+
+        window.addEventListener('touchstart', (e) => {
+            if (e.target.id === 'joystick-zone' || e.target.classList.contains('btn-ui')) return;
+            isTouching = true;
+            lastTouchX = e.touches[0].clientX;
+            lastTouchY = e.touches[0].clientY;
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (!isTouching) return;
+            const deltaX = e.touches[0].clientX - lastTouchX;
+            const deltaY = e.touches[0].clientY - lastTouchY;
+            cameraRotation -= deltaX * 0.005;
+            cameraPitch = Math.max(0.2, Math.min(1.2, cameraPitch + deltaY * 0.005));
+            lastTouchX = e.touches[0].clientX;
+            lastTouchY = e.touches[0].clientY;
+        });
+
+        window.addEventListener('touchend', () => { isTouching = false; });
+
+        document.getElementById('btn-jump').addEventListener('touchstart', () => { if(player.position.y <= 0.76) vY = 0.25; });
+        document.getElementById('btn-attack').addEventListener('touchstart', () => {
+            player.children[0].material.color.set(0xffffff);
+            setTimeout(() => player.children[0].material.color.set(0x2196F3), 100);
+            Object.keys(remotePlayers).forEach(id => {
+                if(player.position.distanceTo(remotePlayers[id].position) < 2.5) socket.emit('attack', id);
+            });
+        });
+
+        // --- 6. MULTIPLAYER SYNC ---
+        socket.on('currentPlayers', (players) => {
+            Object.keys(players).forEach((id) => { if (id !== socket.id) addOtherPlayer(id, players[id]); });
+        });
+        socket.on('newPlayer', (info) => addOtherPlayer(info.id, info));
+        socket.on('playerMoved', (p) => {
+            if (remotePlayers[p.id]) {
+                remotePlayers[p.id].position.set(p.x, p.y, p.z);
+                remotePlayers[p.id].rotation.y = p.ry;
+            }
+        });
+        socket.on('playerDisconnected', (id) => {
+            if (remotePlayers[id]) { scene.remove(remotePlayers[id]); delete remotePlayers[id]; }
+        });
+
+        function addOtherPlayer(id, info) {
+            const other = createCharacter(info.color || 0xffffff, "Player");
+            other.position.set(info.x, 0.75, info.z);
+            scene.add(other);
+            remotePlayers[id] = other;
+        }
+
+        // --- 7. ANIMATE LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Movement & Sprint Logic
+            if(moveData.x || moveData.y) {
+                const speed = (Math.abs(moveData.x) > 0.8 || Math.abs(moveData.y) > 0.8) ? 0.35 : 0.18;
+                
+                // Gerak relatif terhadap kamera
+                const moveX = moveData.x * Math.cos(cameraRotation) + moveData.y * Math.sin(cameraRotation);
+                const moveZ = -moveData.x * Math.sin(cameraRotation) + moveData.y * Math.cos(cameraRotation);
+
+                player.position.x += moveX * speed;
+                player.position.z -= moveZ * speed;
+                player.rotation.y = Math.atan2(moveX, moveZ);
+
+                socket.emit('playerMovement', { x: player.position.x, z: player.position.z, ry: player.rotation.y });
+            }
+
+            // Gravity
+            player.position.y += vY;
+            if(player.position.y > 0.75) vY -= 0.015; else { player.position.y = 0.75; vY = 0; }
+
+            // NPC AI
+            npcs.forEach(bot => {
+                const dist = bot.position.distanceTo(bot.userData.targetPos);
+                if(dist > 0.5) {
+                    const dir = bot.userData.targetPos.clone().sub(bot.position).normalize();
+                    bot.position.add(dir.multiplyScalar(0.04));
+                    bot.lookAt(bot.userData.targetPos);
+                } else {
+                    bot.userData.targetPos.set(Math.random()*200-100, 0.75, Math.random()*200-100);
+                }
+            });
+
+            // Camera Orbit Logic
+            const camDist = 12;
+            camera.position.x = player.position.x + camDist * Math.sin(cameraRotation) * Math.cos(cameraPitch);
+            camera.position.z = player.position.z + camDist * Math.cos(cameraRotation) * Math.cos(cameraPitch);
+            camera.position.y = player.position.y + camDist * Math.sin(cameraPitch) + 2;
+            camera.lookAt(player.position.x, player.position.y + 1, player.position.z);
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
+        // --- 2. SETUP SCENE ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 20, 180); 
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const sun = new THREE.DirectionalLight(0xffffff, 1);
+        sun.position.set(50, 100, 50);
+        sun.castShadow = true;
+        scene.add(sun);
+
+        // --- 3. LANTAI RAKSASA ---
+        const loader = new THREE.TextureLoader();
         const grassTexture = loader.load('https://threejs.org/examples/textures/terrain/grasslight-big.jpg');
         grassTexture.wrapS = grassTexture.wrapT = THREE.RepeatWrapping;
         grassTexture.repeat.set(200, 200); 
