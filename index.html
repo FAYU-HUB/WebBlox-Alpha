@@ -58,7 +58,7 @@
         grassTexture.wrapS = grassTexture.wrapT = THREE.RepeatWrapping;
         grassTexture.repeat.set(200, 200); 
 
-        const floorGeo = new THREE.PlaneGeometry(2000000000, 2000000000);
+        const floorGeo = new THREE.PlaneGeometry(200000, 200000);
         const floorMat = new THREE.MeshStandardMaterial({ map: grassTexture });
         const floor = new THREE.Mesh(floorGeo, floorMat);
         floor.rotation.x = -Math.PI / 2;
