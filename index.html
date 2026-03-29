@@ -1,0 +1,174 @@
+ <!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web Sim - Multi & Relax NPC</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #87CEEB; font-family: sans-serif; }
+        #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; z-index: 10; }
+        .btn-ui { position: absolute; bottom: 60px; width: 70px; height: 70px; background: rgba(255,255,255,0.3); border: 3px solid white; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; z-index: 10; touch-action: none; }
+        #btn-jump { right: 40px; }
+        #btn-attack { right: 130px; background: rgba(255, 0, 0, 0.3); }
+    </style>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+
+    <div id="joystick-zone"></div>
+    <div id="btn-jump" class="btn-ui">JUMP</div>
+    <div id="btn-attack" class="btn-ui">⚔️</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.9.0/nipplejs.min.js"></script>
+
+    <script>
+        // --- 1. SETUP KONEKSI ---
+        const socket = io('http://localhost:7700'); 
+        let remotePlayers = {};
+
+        // --- 2. SETUP SCENE ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const sun = new THREE.DirectionalLight(0xffffff, 1);
+        sun.position.set(5, 10, 5);
+        scene.add(sun);
+
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0x7cfc00 }));
+        floor.rotation.x = -Math.PI / 2;
+        scene.add(floor);
+
+        // --- 3. FUNGSI KARAKTER ---
+        function createCharacter(color, name) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1.5, 0.6), new THREE.MeshStandardMaterial({ color: color }));
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ color: 0xffdbac }));
+            head.position.y = 1.1;
+            group.add(body, head);
+            group.userData.name = name;
+            return group;
+        }
+
+        const player = createCharacter(0x2196F3, "You");
+        player.position.y = 0.75;
+        scene.add(player);
+
+        // --- 4. NPC RELAX (LOKAL) ---
+        const npcs = [];
+        for(let i=0; i<5; i++) {
+            const bot = createCharacter(0x666666, "NPC_" + i);
+            bot.position.set(Math.random()*20-10, 0.75, Math.random()*20-10);
+            bot.userData.targetPos = new THREE.Vector3(Math.random()*20-10, 0.75, Math.random()*20-10);
+            scene.add(bot);
+            npcs.push(bot);
+        }
+
+        // --- 5. LOGIKA MULTIPLAYER ---
+        socket.on('currentPlayers', (players) => {
+            Object.keys(players).forEach((id) => {
+                if (id !== socket.id) addOtherPlayer(id, players[id]);
+            });
+        });
+
+        socket.on('newPlayer', (info) => addOtherPlayer(info.id, info));
+
+        socket.on('playerMoved', (p) => {
+            if (remotePlayers[p.id]) {
+                remotePlayers[p.id].position.set(p.x, p.y, p.z);
+                remotePlayers[p.id].rotation.y = p.ry;
+            }
+        });
+
+        socket.on('playerDisconnected', (id) => {
+            if (remotePlayers[id]) {
+                scene.remove(remotePlayers[id]);
+                delete remotePlayers[id];
+            }
+        });
+
+        function addOtherPlayer(id, info) {
+            const other = createCharacter(info.color || 0xffffff, "Player");
+            other.position.set(info.x, 0.75, info.z);
+            scene.add(other);
+            remotePlayers[id] = other;
+        }
+
+        // --- 6. KONTROL & PVP ---
+        let moveData = { x: 0, y: 0 };
+        const joystick = nipplejs.create({ zone: document.getElementById('joystick-zone'), mode: 'static', position: {left: '60px', bottom: '60px'}, color: 'white' });
+        joystick.on('move', (e, d) => { moveData = { x: d.vector.x, y: d.vector.y }; });
+        joystick.on('end', () => { moveData = { x: 0, y: 0 }; });
+
+        let vY = 0;
+        document.getElementById('btn-jump').addEventListener('touchstart', () => { 
+            if(player.position.y <= 0.76) vY = 0.25; 
+        });
+
+        document.getElementById('btn-attack').addEventListener('touchstart', () => {
+            // Efek visual pukul
+            player.children[0].material.color.set(0xffffff);
+            setTimeout(() => player.children[0].material.color.set(0x2196F3), 100);
+
+            // Cek siapa yang kena
+            Object.keys(remotePlayers).forEach(id => {
+                if(player.position.distanceTo(remotePlayers[id].position) < 2.5) {
+                    socket.emit('attack', id);
+                }
+            });
+        });
+
+        // --- 7. ANIMATE LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Player Move & Sync
+            if(moveData.x || moveData.y) {
+                player.position.x += moveData.x * 0.15;
+                player.position.z -= moveData.y * 0.15;
+                player.rotation.y = Math.atan2(moveData.x, moveData.y);
+                
+                socket.emit('playerMovement', {
+                    x: player.position.x,
+                    z: player.position.z,
+                    ry: player.rotation.y
+                });
+            }
+
+            // Gravity
+            player.position.y += vY;
+            if(player.position.y > 0.75) vY -= 0.015;
+            else { player.position.y = 0.75; vY = 0; }
+
+            // NPC Logic (Relax)
+            npcs.forEach(bot => {
+                const dist = bot.position.distanceTo(bot.userData.targetPos);
+                if(dist > 0.5) {
+                    const dir = bot.userData.targetPos.clone().sub(bot.position).normalize();
+                    bot.position.add(dir.multiplyScalar(0.03));
+                    bot.lookAt(bot.userData.targetPos);
+                } else {
+                    bot.userData.targetPos.set(Math.random()*40-20, 0.75, Math.random()*40-20);
+                }
+            });
+
+            camera.position.lerp(new THREE.Vector3(player.position.x, player.position.y + 6, player.position.z + 10), 0.1);
+            camera.lookAt(player.position);
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
