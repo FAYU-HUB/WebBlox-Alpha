@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Web Sim - Multi & Relax NPC</title>
+    <title>WebBlox Alpha</title>
     <style>
         body { margin: 0; overflow: hidden; background: #87CEEB; font-family: sans-serif; }
         #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; z-index: 10; }
@@ -163,6 +163,48 @@
         }
 
         animate();
+
+     // --- 1. LOADER TEKSTUR ---
+const loader = new THREE.TextureLoader();
+// Menggunakan tekstur rumput dari CDN gratis
+const grassTexture = loader.load('https://threejs.org/examples/textures/terrain/grasslight-big.jpg');
+
+// Biar teksturnya gak melar (stretched), kita buat dia berulang (Repeat)
+grassTexture.wrapS = THREE.RepeatWrapping;
+grassTexture.wrapT = THREE.RepeatWrapping;
+grassTexture.repeat.set(100, 100); // Tekstur diulang 100x agar detailnya pas di map 2000
+
+// --- 2. BUAT LANTAI RAKSASA ---
+const floorGeo = new THREE.PlaneGeometry(2000, 2000);
+const floorMat = new THREE.MeshStandardMaterial({ 
+    map: grassTexture, // Memasang gambar rumput
+    roughness: 0.8
+});
+
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI / 2; // Tidurkan lantai
+floor.position.y = 0; // Kaki pemain tepat di atas lantai
+floor.receiveShadow = true;
+scene.add(floor);
+
+// --- 3. GRID HELPER (OPSIONAL) ---
+// Ditambah grid tipis biar kerasa jarak geraknya
+const grid = new THREE.GridHelper(2000, 100, 0x000000, 0x000000);
+grid.position.y = 0.05;
+grid.material.opacity = 0.1;
+grid.material.transparent = true;
+scene.add(grid);
+
+     // Tambahkan ini di bawah bagian LANTAI di index.html
+const boxGeo = new THREE.BoxGeometry(2, 2, 2);
+const boxMat = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
+for(let i=0; i<10; i++) {
+    const obstacle = new THREE.Mesh(boxGeo, boxMat);
+    obstacle.position.set(Math.random()*40-20, 1, Math.random()*40-20);
+    scene.add(obstacle);
+}
+
+
 
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
