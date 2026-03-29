@@ -9,7 +9,8 @@
         #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; z-index: 10; }
         .btn-ui { position: absolute; bottom: 60px; width: 70px; height: 70px; background: rgba(255,255,255,0.3); border: 3px solid white; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; z-index: 10; touch-action: none; }
         #btn-jump { right: 40px; }
-        #btn-attack { right: 130px; background: rgba(255, 0, 0, 0.3); }
+        /* Ikon serangan diganti jadi pukulan agar lebih aman di GitHub */
+        #btn-attack { right: 130px; background: rgba(255, 165, 0, 0.3); border-color: orange; }
     </style>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
@@ -17,13 +18,14 @@
 
     <div id="joystick-zone"></div>
     <div id="btn-jump" class="btn-ui">JUMP</div>
-    <div id="btn-attack" class="btn-ui">⚔️</div>
+    <div id="btn-attack" class="btn-ui">👊</div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.9.0/nipplejs.min.js"></script>
 
     <script>
         // --- 1. CONFIG & STATE ---
+        // Hubungkan ke server kamu (Ganti localhost jikahosting online)
         const socket = io('http://localhost:7700'); 
         let remotePlayers = {};
         let moveData = { x: 0, y: 0 };
@@ -35,72 +37,165 @@
         let isTouching = false;
         let lastTouchX = 0, lastTouchY = 0;
 
+        // Radius Spawn objek dari tengah (agar tidak terlalu jauh)
+        const SPAWN_RANGE = 500; 
+
         // --- 2. SETUP SCENE ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87CEEB);
-        scene.fog = new THREE.Fog(0x87CEEB, 20, 180); 
+        // Kabut (Fog) sangat penting di map luas agar ujung map halus
+        scene.fog = new THREE.Fog(0x87CEEB, 20, SPAWN_RANGE + 50); 
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.enabled = true; // Aktifkan bayangan
         document.body.appendChild(renderer.domElement);
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-        const sun = new THREE.DirectionalLight(0xffffff, 1);
-        sun.position.set(50, 100, 50);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6)); // Lampu lingkungan
+        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+        sun.position.set(200, 300, 100);
         sun.castShadow = true;
+        // Kualitas bayangan
+        sun.shadow.mapSize.width = 2048; 
+        sun.shadow.mapSize.height = 2048;
+        sun.shadow.camera.far = 1000;
+        // Area bayangan DirectionalLight (harus luas)
+        const d = 500;
+        sun.shadow.camera.left = -d; sun.shadow.camera.right = d;
+        sun.shadow.camera.top = d; sun.shadow.camera.bottom = -d;
         scene.add(sun);
 
-        // --- 3. LANTAI RAKSASA ---
+        // --- 3. LANTAI RAKSASA (Baseplate) ---
         const loader = new THREE.TextureLoader();
+        // Memakai tekstur rumput
         const grassTexture = loader.load('https://files.catbox.moe/lbkbsp.jpeg');
         grassTexture.wrapS = grassTexture.wrapT = THREE.RepeatWrapping;
-        grassTexture.repeat.set(200, 200); 
+        // Diulang banyak agar detail tidak pecah di map super luas
+        grassTexture.repeat.set(500, 500); 
 
-        const floorGeo = new THREE.PlaneGeometry(200000, 200000);
+        // Ukuran lantai diubah kembali ke 2000 untuk performa HP
+        // Map 200000 terlalu ekstrem untuk HP jika diberi tabrakan/bayangan.
+        const floorGeo = new THREE.PlaneGeometry(2000, 2000);
         const floorMat = new THREE.MeshStandardMaterial({ map: grassTexture });
         const floor = new THREE.Mesh(floorGeo, floorMat);
         floor.rotation.x = -Math.PI / 2;
-        floor.receiveShadow = true;
+        floor.receiveShadow = true; // Lantai menerima bayangan
         scene.add(floor);
 
-        // --- 4. KARAKTER & OBJEK ---
+        // --- 4. KARAKTER ---
         function createCharacter(color, name) {
             const group = new THREE.Group();
+            // Badan
             const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1.5, 0.6), new THREE.MeshStandardMaterial({ color: color }));
             body.castShadow = true;
+            body.position.y = 0.75;
+            // Kepala
             const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ color: 0xffdbac }));
-            head.position.y = 1.1;
+            head.position.y = 1.6;
+            head.castShadow = true;
             group.add(body, head);
             return group;
         }
 
         const player = createCharacter(0x2196F3, "You");
-        player.position.y = 0.75;
+        player.position.y = 0; // Kaki di tanah (0)
         scene.add(player);
 
-        for(let i=0; i<15; i++) {
-            const obstacle = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ color: 0xffaa00 }));
-            obstacle.position.set(Math.random()*100-50, 1, Math.random()*100-50);
+        // --- 5. RINTANGAN (OBSTACLES) ---
+        const boxGeo = new THREE.BoxGeometry(2, 2, 2);
+        const boxMat = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
+        for(let i=0; i<20; i++) {
+            const obstacle = new THREE.Mesh(boxGeo, boxMat);
+            obstacle.position.set(Math.random()*200-100, 1, Math.random()*200-100);
             obstacle.castShadow = true;
             scene.add(obstacle);
         }
 
+        // --- 6. ENVIRONMENT GENERATOR (GUNUNG & POHON ACAK) ---
+        const treeGroup = new THREE.Group();
+        const mountainGroup = new THREE.Group();
+
+        // Fungsi buat Pohon (Kerucut + Tabung)
+        function createTree() {
+            const group = new THREE.Group();
+            // Batang
+            const trunk = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.3, 0.3, 2), 
+                new THREE.MeshStandardMaterial({ color: 0x8B4513 })
+            );
+            trunk.position.y = 1;
+            trunk.castShadow = true;
+            // Daun
+            const leaves = new THREE.Mesh(
+                new THREE.ConeGeometry(1.5, 4, 8),
+                new THREE.MeshStandardMaterial({ color: 0x228B22 })
+            );
+            leaves.position.y = 3.5;
+            leaves.castShadow = true;
+            group.add(trunk, leaves);
+            return group;
+        }
+
+        // Generate 100 Pohon Acak
+        for(let i=0; i<100; i++) {
+            const tree = createTree();
+            // Posisi acak di sekitar spawn
+            const x = (Math.random() - 0.5) * SPAWN_RANGE * 2;
+            const z = (Math.random() - 0.5) * SPAWN_RANGE * 2;
+            // Hindari area tengah agar player tidak terjepit pohon saat masuk
+            if (Math.abs(x) < 20 && Math.abs(z) < 20) continue; 
+            
+            tree.position.set(x, 0, z);
+            tree.rotation.y = Math.random() * Math.PI; // Rotasi acak daun
+            treeGroup.add(tree);
+        }
+        scene.add(treeGroup);
+
+        // Fungsi buat Gunung (Kerucut Raksasa)
+        for(let i=0; i<15; i++) {
+            const height = 30 + Math.random() * 50; // Tinggi acak 30-80
+            const radius = 20 + Math.random() * 30; // Lebar bawah acak 20-50
+            
+            const mountainGeo = new THREE.ConeGeometry(radius, height, 4); // Kerucut segi 4
+            const mountainMat = new THREE.MeshStandardMaterial({ 
+                color: 0x708090, // Abu-abu kebiruan
+                flatShading: true // Kesan polygon kaku
+            });
+            const mountain = new THREE.Mesh(mountainGeo, mountainMat);
+            
+            // Posisi di luar area rintangan/pohon agar tidak tumpang tindih
+            const x = (Math.random() - 0.5) * SPAWN_RANGE * 2.5;
+            const z = (Math.random() - 0.5) * SPAWN_RANGE * 2.5;
+            if (Math.abs(x) < 150 && Math.abs(z) < 150) continue; // Area tengah steril gunung
+
+            mountain.position.set(x, height / 2, z); // Posisi Y adalah setengah tinggi agar dasar di tanah
+            mountain.rotation.y = Math.random() * Math.PI;
+            mountain.receiveShadow = true;
+            // Untuk HP, sebaiknya gunung tidak cast shadow (berat)
+            mountainGroup.add(mountain);
+        }
+        scene.add(mountainGroup);
+
+
+        // --- 7. NPC RELAX ---
         const npcs = [];
         for(let i=0; i<8; i++) {
             const bot = createCharacter(0x666666, "NPC");
-            bot.position.set(Math.random()*40-20, 0.75, Math.random()*40-20);
-            bot.userData.targetPos = new THREE.Vector3(Math.random()*200-100, 0.75, Math.random()*200-100);
+            // Spawn kaki di 0
+            bot.position.set(Math.random()*100-50, 0, Math.random()*100-50);
+            // Target jalan santai dalam radius 200
+            bot.userData.targetPos = new THREE.Vector3(Math.random()*400-200, 0, Math.random()*400-200);
             scene.add(bot);
             npcs.push(bot);
         }
 
-        // --- 5. INPUT LISTENERS ---
+        // --- 8. INPUT LISTENERS ---
         const joystick = nipplejs.create({ zone: document.getElementById('joystick-zone'), mode: 'static', position: {left: '60px', bottom: '60px'}, color: 'white' });
         joystick.on('move', (e, d) => { moveData = { x: d.vector.x, y: d.vector.y }; });
         joystick.on('end', () => { moveData = { x: 0, y: 0 }; });
 
+        // Touch Area Rotasi Kamera
         window.addEventListener('touchstart', (e) => {
             if (e.target.id === 'joystick-zone' || e.target.classList.contains('btn-ui')) return;
             isTouching = true;
@@ -112,24 +207,38 @@
             if (!isTouching) return;
             const deltaX = e.touches[0].clientX - lastTouchX;
             const deltaY = e.touches[0].clientY - lastTouchY;
-            cameraRotation -= deltaX * 0.005;
-            cameraPitch = Math.max(0.2, Math.min(1.2, cameraPitch + deltaY * 0.005));
+            cameraRotation -= deltaX * 0.005; // Horizontal sensitivitas
+            // Batasi Pitch atas/bawah agar tidak jungkir balik
+            cameraPitch = Math.max(0.1, Math.min(1.4, cameraPitch + deltaY * 0.005));
             lastTouchX = e.touches[0].clientX;
             lastTouchY = e.touches[0].clientY;
         });
 
         window.addEventListener('touchend', () => { isTouching = false; });
 
-        document.getElementById('btn-jump').addEventListener('touchstart', () => { if(player.position.y <= 0.76) vY = 0.25; });
+        document.getElementById('btn-jump').addEventListener('touchstart', () => { 
+            if(player.position.y <= 0.01) vY = 0.28; // Lompatan sedikit lebih tinggi
+        });
+        
         document.getElementById('btn-attack').addEventListener('touchstart', () => {
+            // Animasi pukul visual
             player.children[0].material.color.set(0xffffff);
             setTimeout(() => player.children[0].material.color.set(0x2196F3), 100);
+            
+            // Cek pukul player lain (Knockback)
             Object.keys(remotePlayers).forEach(id => {
-                if(player.position.distanceTo(remotePlayers[id].position) < 2.5) socket.emit('attack', id);
+                const target = remotePlayers[id];
+                if(player.position.distanceTo(target.position) < 3) {
+                    // Beritahu server kita memukul player 'id'
+                    socket.emit('attack', id); 
+                    // Efek visual pukul lokal ke target
+                    target.children[0].material.color.set(0xffcccc);
+                    setTimeout(() => target.children[0].material.color.set(0xffffff), 150);
+                }
             });
         });
 
-        // --- 6. MULTIPLAYER SYNC ---
+        // --- 9. MULTIPLAYER SYNC ---
         socket.on('currentPlayers', (players) => {
             Object.keys(players).forEach((id) => { if (id !== socket.id) addOtherPlayer(id, players[id]); });
         });
@@ -145,230 +254,68 @@
         });
 
         function addOtherPlayer(id, info) {
-            const other = createCharacter(info.color || 0xffffff, "Player");
-            other.position.set(info.x, 0.75, info.z);
+            const other = createCharacter(0xffffff, "Player"); // Player lain putih
+            other.position.set(info.x, 0, info.z);
             scene.add(other);
             remotePlayers[id] = other;
         }
 
-        // --- 7. ANIMATE LOOP ---
+        // --- 10. ANIMATE LOOP ---
         function animate() {
             requestAnimationFrame(animate);
 
-            // Movement & Sprint Logic
+            // Movement & Sprint Logic (Berjalan Relatif Kamera)
             if(moveData.x || moveData.y) {
-                const speed = (Math.abs(moveData.x) > 0.8 || Math.abs(moveData.y) > 0.8) ? 0.35 : 0.18;
+                // Sprint jika joystick ditarik penuh
+                const sprintMult = (Math.abs(moveData.x) > 0.8 || Math.abs(moveData.y) > 0.8) ? 1.0 : 0.5;
+                const speed = 0.35 * sprintMult;
                 
-                // Gerak relatif terhadap kamera
+                // Hitung arah gerak berdasarkan rotasi kamera saat ini
                 const moveX = moveData.x * Math.cos(cameraRotation) + moveData.y * Math.sin(cameraRotation);
                 const moveZ = -moveData.x * Math.sin(cameraRotation) + moveData.y * Math.cos(cameraRotation);
 
                 player.position.x += moveX * speed;
                 player.position.z -= moveZ * speed;
-                player.rotation.y = Math.atan2(moveX, moveZ);
+                player.rotation.y = Math.atan2(moveX, moveZ); // Hadap karakter
 
-                socket.emit('playerMovement', { x: player.position.x, z: player.position.z, ry: player.rotation.y });
+                // Sinkron posisi ke server
+                socket.emit('playerMovement', { x: player.position.x, y: player.position.y, z: player.position.z, ry: player.rotation.y });
             }
 
-            // Gravity
+            // Gravity (y dasar di 0)
             player.position.y += vY;
-            if(player.position.y > 0.75) vY -= 0.015; else { player.position.y = 0.75; vY = 0; }
+            if(player.position.y > 0) vY -= 0.018; else { player.position.y = 0; vY = 0; }
 
-            // NPC AI
+            // NPC AI (Relax Wander)
             npcs.forEach(bot => {
                 const dist = bot.position.distanceTo(bot.userData.targetPos);
-                if(dist > 0.5) {
+                if(dist > 1.0) {
                     const dir = bot.userData.targetPos.clone().sub(bot.position).normalize();
                     bot.position.add(dir.multiplyScalar(0.04));
                     bot.lookAt(bot.userData.targetPos);
                 } else {
-                    bot.userData.targetPos.set(Math.random()*200-100, 0.75, Math.random()*200-100);
+                    // Pilih target baru dalam radius 300
+                    bot.userData.targetPos.set(Math.random()*600-300, 0, Math.random()*600-300);
                 }
             });
 
-            // Camera Orbit Logic
-            const camDist = 12;
+            // Camera Orbit Logic (Mengikuti Player)
+            const camDist = 12; // Jarak kamera
+            // Menghitung koordinat bola untuk kamera orbit
             camera.position.x = player.position.x + camDist * Math.sin(cameraRotation) * Math.cos(cameraPitch);
             camera.position.z = player.position.z + camDist * Math.cos(cameraRotation) * Math.cos(cameraPitch);
-            camera.position.y = player.position.y + camDist * Math.sin(cameraPitch) + 2;
-            camera.lookAt(player.position.x, player.position.y + 1, player.position.z);
+            // +2 agar kamera agak tinggi melihat player
+            camera.position.y = player.position.y + camDist * Math.sin(cameraPitch) + 1.8; 
+
+            // Kamera selalu melihat ke arah tubuh player
+            camera.lookAt(player.position.x, player.position.y + 1.2, player.position.z);
 
             renderer.render(scene, camera);
         }
 
         animate();
 
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-    </script>
-</body>
-</html>
-        // --- 2. SETUP SCENE ---
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB);
-        scene.fog = new THREE.Fog(0x87CEEB, 20, 180); 
-
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.shadowMap.enabled = true;
-        document.body.appendChild(renderer.domElement);
-
-        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-        const sun = new THREE.DirectionalLight(0xffffff, 1);
-        sun.position.set(50, 100, 50);
-        sun.castShadow = true;
-        scene.add(sun);
-
-        // --- 3. LANTAI RAKSASA ---
-        const loader = new THREE.TextureLoader();
-        const grassTexture = loader.load('https://threejs.org/examples/textures/terrain/grasslight-big.jpg');
-        grassTexture.wrapS = grassTexture.wrapT = THREE.RepeatWrapping;
-        grassTexture.repeat.set(200, 200); 
-
-        const floorGeo = new THREE.PlaneGeometry(200000, 200000);
-        const floorMat = new THREE.MeshStandardMaterial({ map: grassTexture });
-        const floor = new THREE.Mesh(floorGeo, floorMat);
-        floor.rotation.x = -Math.PI / 2;
-        floor.receiveShadow = true;
-        scene.add(floor);
-
-        // --- 4. KARAKTER & OBJEK ---
-        function createCharacter(color, name) {
-            const group = new THREE.Group();
-            const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1.5, 0.6), new THREE.MeshStandardMaterial({ color: color }));
-            body.castShadow = true;
-            const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ color: 0xffdbac }));
-            head.position.y = 1.1;
-            group.add(body, head);
-            return group;
-        }
-
-        const player = createCharacter(0x2196F3, "You");
-        player.position.y = 0.75;
-        scene.add(player);
-
-        for(let i=0; i<15; i++) {
-            const obstacle = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ color: 0xffaa00 }));
-            obstacle.position.set(Math.random()*100-50, 1, Math.random()*100-50);
-            obstacle.castShadow = true;
-            scene.add(obstacle);
-        }
-
-        const npcs = [];
-        for(let i=0; i<8; i++) {
-            const bot = createCharacter(0x666666, "NPC");
-            bot.position.set(Math.random()*40-20, 0.75, Math.random()*40-20);
-            bot.userData.targetPos = new THREE.Vector3(Math.random()*200-100, 0.75, Math.random()*200-100);
-            scene.add(bot);
-            npcs.push(bot);
-        }
-
-        // --- 5. INPUT LISTENERS ---
-        const joystick = nipplejs.create({ zone: document.getElementById('joystick-zone'), mode: 'static', position: {left: '60px', bottom: '60px'}, color: 'white' });
-        joystick.on('move', (e, d) => { moveData = { x: d.vector.x, y: d.vector.y }; });
-        joystick.on('end', () => { moveData = { x: 0, y: 0 }; });
-
-        window.addEventListener('touchstart', (e) => {
-            if (e.target.id === 'joystick-zone' || e.target.classList.contains('btn-ui')) return;
-            isTouching = true;
-            lastTouchX = e.touches[0].clientX;
-            lastTouchY = e.touches[0].clientY;
-        });
-
-        window.addEventListener('touchmove', (e) => {
-            if (!isTouching) return;
-            const deltaX = e.touches[0].clientX - lastTouchX;
-            const deltaY = e.touches[0].clientY - lastTouchY;
-            cameraRotation -= deltaX * 0.005;
-            cameraPitch = Math.max(0.2, Math.min(1.2, cameraPitch + deltaY * 0.005));
-            lastTouchX = e.touches[0].clientX;
-            lastTouchY = e.touches[0].clientY;
-        });
-
-        window.addEventListener('touchend', () => { isTouching = false; });
-
-        document.getElementById('btn-jump').addEventListener('touchstart', () => { if(player.position.y <= 0.76) vY = 0.25; });
-        document.getElementById('btn-attack').addEventListener('touchstart', () => {
-            player.children[0].material.color.set(0xffffff);
-            setTimeout(() => player.children[0].material.color.set(0x2196F3), 100);
-            Object.keys(remotePlayers).forEach(id => {
-                if(player.position.distanceTo(remotePlayers[id].position) < 2.5) socket.emit('attack', id);
-            });
-        });
-
-        // --- 6. MULTIPLAYER SYNC ---
-        socket.on('currentPlayers', (players) => {
-            Object.keys(players).forEach((id) => { if (id !== socket.id) addOtherPlayer(id, players[id]); });
-        });
-        socket.on('newPlayer', (info) => addOtherPlayer(info.id, info));
-        socket.on('playerMoved', (p) => {
-            if (remotePlayers[p.id]) {
-                remotePlayers[p.id].position.set(p.x, p.y, p.z);
-                remotePlayers[p.id].rotation.y = p.ry;
-            }
-        });
-        socket.on('playerDisconnected', (id) => {
-            if (remotePlayers[id]) { scene.remove(remotePlayers[id]); delete remotePlayers[id]; }
-        });
-
-        function addOtherPlayer(id, info) {
-            const other = createCharacter(info.color || 0xffffff, "Player");
-            other.position.set(info.x, 0.75, info.z);
-            scene.add(other);
-            remotePlayers[id] = other;
-        }
-
-        // --- 7. ANIMATE LOOP ---
-        function animate() {
-            requestAnimationFrame(animate);
-
-            // Movement & Sprint Logic
-            if(moveData.x || moveData.y) {
-                const speed = (Math.abs(moveData.x) > 0.8 || Math.abs(moveData.y) > 0.8) ? 0.35 : 0.18;
-                
-                // Gerak relatif terhadap kamera
-                const moveX = moveData.x * Math.cos(cameraRotation) + moveData.y * Math.sin(cameraRotation);
-                const moveZ = -moveData.x * Math.sin(cameraRotation) + moveData.y * Math.cos(cameraRotation);
-
-                player.position.x += moveX * speed;
-                player.position.z -= moveZ * speed;
-                player.rotation.y = Math.atan2(moveX, moveZ);
-
-                socket.emit('playerMovement', { x: player.position.x, z: player.position.z, ry: player.rotation.y });
-            }
-
-            // Gravity
-            player.position.y += vY;
-            if(player.position.y > 0.75) vY -= 0.015; else { player.position.y = 0.75; vY = 0; }
-
-            // NPC AI
-            npcs.forEach(bot => {
-                const dist = bot.position.distanceTo(bot.userData.targetPos);
-                if(dist > 0.5) {
-                    const dir = bot.userData.targetPos.clone().sub(bot.position).normalize();
-                    bot.position.add(dir.multiplyScalar(0.04));
-                    bot.lookAt(bot.userData.targetPos);
-                } else {
-                    bot.userData.targetPos.set(Math.random()*200-100, 0.75, Math.random()*200-100);
-                }
-            });
-
-            // Camera Orbit Logic
-            const camDist = 12;
-            camera.position.x = player.position.x + camDist * Math.sin(cameraRotation) * Math.cos(cameraPitch);
-            camera.position.z = player.position.z + camDist * Math.cos(cameraRotation) * Math.cos(cameraPitch);
-            camera.position.y = player.position.y + camDist * Math.sin(cameraPitch) + 2;
-            camera.lookAt(player.position.x, player.position.y + 1, player.position.z);
-
-            renderer.render(scene, camera);
-        }
-
-        animate();
-
+        // Responsive saat layar HP diputar
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
