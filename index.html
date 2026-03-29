@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>9x-Exodus Infinity</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #87CEEB; font-family: sans-serif; }
+        body { margin: 0; overflow: hidden; background: #87CEEB; font-family: sans-serif; touch-action: none; }
         #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; z-index: 10; }
         .btn-ui { position: absolute; bottom: 60px; width: 70px; height: 70px; background: rgba(255,255,255,0.3); border: 3px solid white; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; z-index: 10; touch-action: none; }
         #btn-jump { right: 40px; }
@@ -23,17 +23,24 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.9.0/nipplejs.min.js"></script>
 
     <script>
-        // --- 1. SETUP KONEKSI ---
+        // --- 1. CONFIG & STATE ---
         const socket = io('http://localhost:7700'); 
         let remotePlayers = {};
+        let moveData = { x: 0, y: 0 };
+        let vY = 0;
+        
+        // Kamera State
+        let cameraRotation = 0; 
+        let cameraPitch = 0.5;  
+        let isTouching = false;
+        let lastTouchX = 0, lastTouchY = 0;
 
-        // --- 2. SETUP SCENE & FOG ---
+        // --- 2. SETUP SCENE ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87CEEB);
-        // Tambah kabut biar ujung map halus
-        scene.fog = new THREE.Fog(0x87CEEB, 20, 150); 
+        scene.fog = new THREE.Fog(0x87CEEB, 20, 180); 
 
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true;
@@ -45,26 +52,20 @@
         sun.castShadow = true;
         scene.add(sun);
 
-        // --- 3. LANTAI RAKSASA 2K DENGAN TEKSTUR ---
+        // --- 3. LANTAI RAKSASA ---
         const loader = new THREE.TextureLoader();
         const grassTexture = loader.load('https://threejs.org/examples/textures/terrain/grasslight-big.jpg');
         grassTexture.wrapS = grassTexture.wrapT = THREE.RepeatWrapping;
-        grassTexture.repeat.set(100, 100); 
+        grassTexture.repeat.set(200, 200); 
 
-        const floorGeo = new THREE.PlaneGeometry(20000, 20000);
+        const floorGeo = new THREE.PlaneGeometry(2000, 2000);
         const floorMat = new THREE.MeshStandardMaterial({ map: grassTexture });
         const floor = new THREE.Mesh(floorGeo, floorMat);
         floor.rotation.x = -Math.PI / 2;
         floor.receiveShadow = true;
         scene.add(floor);
 
-        // Grid tipis
-        const grid = new THREE.GridHelper(2000, 100, 0x000000, 0x000000);
-        grid.material.opacity = 0.1;
-        grid.material.transparent = true;
-        scene.add(grid);
-
-        // --- 4. FUNGSI KARAKTER ---
+        // --- 4. KARAKTER & OBJEK ---
         function createCharacter(color, name) {
             const group = new THREE.Group();
             const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1.5, 0.6), new THREE.MeshStandardMaterial({ color: color }));
@@ -72,7 +73,6 @@
             const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ color: 0xffdbac }));
             head.position.y = 1.1;
             group.add(body, head);
-            group.userData.name = name;
             return group;
         }
 
@@ -80,31 +80,58 @@
         player.position.y = 0.75;
         scene.add(player);
 
-        // --- 5. RINTANGAN (OBSTACLES) ---
-        const boxGeo = new THREE.BoxGeometry(2, 2, 2);
-        const boxMat = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
         for(let i=0; i<15; i++) {
-            const obstacle = new THREE.Mesh(boxGeo, boxMat);
-            obstacle.position.set(Math.random()*60-30, 1, Math.random()*60-30);
+            const obstacle = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ color: 0xffaa00 }));
+            obstacle.position.set(Math.random()*100-50, 1, Math.random()*100-50);
             obstacle.castShadow = true;
             scene.add(obstacle);
         }
 
-        // --- 6. NPC RELAX ---
         const npcs = [];
         for(let i=0; i<8; i++) {
-            const bot = createCharacter(0x666666, "NPC_" + i);
+            const bot = createCharacter(0x666666, "NPC");
             bot.position.set(Math.random()*40-20, 0.75, Math.random()*40-20);
-            bot.userData.targetPos = new THREE.Vector3(Math.random()*100-50, 0.75, Math.random()*100-50);
+            bot.userData.targetPos = new THREE.Vector3(Math.random()*200-100, 0.75, Math.random()*200-100);
             scene.add(bot);
             npcs.push(bot);
         }
 
-        // --- 7. MULTIPLAYER LOGIC ---
-        socket.on('currentPlayers', (players) => {
-            Object.keys(players).forEach((id) => {
-                if (id !== socket.id) addOtherPlayer(id, players[id]);
+        // --- 5. INPUT LISTENERS ---
+        const joystick = nipplejs.create({ zone: document.getElementById('joystick-zone'), mode: 'static', position: {left: '60px', bottom: '60px'}, color: 'white' });
+        joystick.on('move', (e, d) => { moveData = { x: d.vector.x, y: d.vector.y }; });
+        joystick.on('end', () => { moveData = { x: 0, y: 0 }; });
+
+        window.addEventListener('touchstart', (e) => {
+            if (e.target.id === 'joystick-zone' || e.target.classList.contains('btn-ui')) return;
+            isTouching = true;
+            lastTouchX = e.touches[0].clientX;
+            lastTouchY = e.touches[0].clientY;
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (!isTouching) return;
+            const deltaX = e.touches[0].clientX - lastTouchX;
+            const deltaY = e.touches[0].clientY - lastTouchY;
+            cameraRotation -= deltaX * 0.005;
+            cameraPitch = Math.max(0.2, Math.min(1.2, cameraPitch + deltaY * 0.005));
+            lastTouchX = e.touches[0].clientX;
+            lastTouchY = e.touches[0].clientY;
+        });
+
+        window.addEventListener('touchend', () => { isTouching = false; });
+
+        document.getElementById('btn-jump').addEventListener('touchstart', () => { if(player.position.y <= 0.76) vY = 0.25; });
+        document.getElementById('btn-attack').addEventListener('touchstart', () => {
+            player.children[0].material.color.set(0xffffff);
+            setTimeout(() => player.children[0].material.color.set(0x2196F3), 100);
+            Object.keys(remotePlayers).forEach(id => {
+                if(player.position.distanceTo(remotePlayers[id].position) < 2.5) socket.emit('attack', id);
             });
+        });
+
+        // --- 6. MULTIPLAYER SYNC ---
+        socket.on('currentPlayers', (players) => {
+            Object.keys(players).forEach((id) => { if (id !== socket.id) addOtherPlayer(id, players[id]); });
         });
         socket.on('newPlayer', (info) => addOtherPlayer(info.id, info));
         socket.on('playerMoved', (p) => {
@@ -124,72 +151,30 @@
             remotePlayers[id] = other;
         }
 
-        // --- 8. KONTROL & ANIMATE ---
-        let moveData = { x: 0, y: 0 }, vY = 0;
-        const joystick = nipplejs.create({ zone: document.getElementById('joystick-zone'), mode: 'static', position: {left: '60px', bottom: '60px'}, color: 'white' });
-        joystick.on('move', (e, d) => { moveData = { x: d.vector.x, y: d.vector.y }; });
-        joystick.on('end', () => { moveData = { x: 0, y: 0 }; });
-        // Deteksi sentuhan di layar (selain di area joystick/tombol)
-window.addEventListener('touchstart', (e) => {
-    // Cek jika sentuhan bukan pada area joystick atau tombol
-    if (e.target.id === 'joystick-zone' || e.target.classList.contains('btn-ui')) return;
-    
-    isTouching = true;
-    lastTouchX = e.touches[0].clientX;
-    lastTouchY = e.touches[0].clientY;
-});
-
-window.addEventListener('touchmove', (e) => {
-    if (!isTouching) return;
-
-    const deltaX = e.touches[0].clientX - lastTouchX;
-    const deltaY = e.touches[0].clientY - lastTouchY;
-
-    // Sensitivitas kamera (silakan ubah 0.005 jika kurang cepat)
-    cameraRotation -= deltaX * 0.005;
-    cameraPitch += deltaY * 0.005;
-
-    // Batasi kamera biar gak jungkir balik (Pitch)
-    cameraPitch = Math.max(0.2, Math.min(1.2, cameraPitch));
-
-    lastTouchX = e.touches[0].clientX;
-    lastTouchY = e.touches[0].clientY;
-});
-
-window.addEventListener('touchend', () => {
-    isTouching = false;
-});
-
-
-        document.getElementById('btn-jump').addEventListener('touchstart', () => { if(player.position.y <= 0.76) vY = 0.25; });
-        document.getElementById('btn-attack').addEventListener('touchstart', () => {
-            player.children[0].material.color.set(0xffffff);
-            setTimeout(() => player.children[0].material.color.set(0x2196F3), 100);
-            Object.keys(remotePlayers).forEach(id => {
-                if(player.position.distanceTo(remotePlayers[id].position) < 2.5) socket.emit('attack', id);
-            });
-        });
-
-// --- LOGIKA ROTASI LAYAR ---
-let cameraRotation = 0; // Rotasi horizontal
-let cameraPitch = 0.5;  // Rotasi vertikal (sudut pandang atas-bawah)
-let isTouching = false;
-let lastTouchX = 0;
-let lastTouchY = 0;
-
-        
-        
+        // --- 7. ANIMATE LOOP ---
         function animate() {
             requestAnimationFrame(animate);
+
+            // Movement & Sprint Logic
             if(moveData.x || moveData.y) {
-                player.position.x += moveData.x * 0.15;
-                player.position.z -= moveData.y * 0.15;
-                player.rotation.y = Math.atan2(moveData.x, moveData.y);
+                const speed = (Math.abs(moveData.x) > 0.8 || Math.abs(moveData.y) > 0.8) ? 0.35 : 0.18;
+                
+                // Gerak relatif terhadap kamera
+                const moveX = moveData.x * Math.cos(cameraRotation) + moveData.y * Math.sin(cameraRotation);
+                const moveZ = -moveData.x * Math.sin(cameraRotation) + moveData.y * Math.cos(cameraRotation);
+
+                player.position.x += moveX * speed;
+                player.position.z -= moveZ * speed;
+                player.rotation.y = Math.atan2(moveX, moveZ);
+
                 socket.emit('playerMovement', { x: player.position.x, z: player.position.z, ry: player.rotation.y });
             }
+
+            // Gravity
             player.position.y += vY;
             if(player.position.y > 0.75) vY -= 0.015; else { player.position.y = 0.75; vY = 0; }
 
+            // NPC AI
             npcs.forEach(bot => {
                 const dist = bot.position.distanceTo(bot.userData.targetPos);
                 if(dist > 0.5) {
@@ -201,27 +186,16 @@ let lastTouchY = 0;
                 }
             });
 
-            camera.position.lerp(new THREE.Vector3(player.position.x, player.position.y + 6, player.position.z + 10), 0.1);
-            camera.lookAt(player.position);
+            // Camera Orbit Logic
+            const camDist = 12;
+            camera.position.x = player.position.x + camDist * Math.sin(cameraRotation) * Math.cos(cameraPitch);
+            camera.position.z = player.position.z + camDist * Math.cos(cameraRotation) * Math.cos(cameraPitch);
+            camera.position.y = player.position.y + camDist * Math.sin(cameraPitch) + 2;
+            camera.lookAt(player.position.x, player.position.y + 1, player.position.z);
+
             renderer.render(scene, camera);
-            // --- LOGIKA PERGERAKAN DENGAN SPEED ---
-if (moveData.x || moveData.y) {
-    // Tentukan kecepatan: jika ditarik jauh (sprint), speed naik
-    // Default: 0.15, Sprint: 0.35
-    const currentSpeed = (Math.abs(moveData.x) > 0.8 || Math.abs(moveData.y) > 0.8) ? 0.35 : 0.18;
-
-    player.position.x += moveData.x * currentSpeed;
-    player.position.z -= moveData.y * currentSpeed;
-    player.rotation.y = Math.atan2(moveData.x, moveData.y);
-
-    // Kirim posisi ke server agar player lain melihat kamu lari cepat
-    socket.emit('playerMovement', {
-        x: player.position.x,
-        z: player.position.z,
-        ry: player.rotation.y
-    });
         }
-        }
+
         animate();
 
         window.addEventListener('resize', () => {
