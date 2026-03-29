@@ -1,9 +1,9 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="id">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WebBlox Alpha</title>
+    <title>9x-Exodus Infinity</title>
     <style>
         body { margin: 0; overflow: hidden; background: #87CEEB; font-family: sans-serif; }
         #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; z-index: 10; }
@@ -27,27 +27,48 @@
         const socket = io('http://localhost:7700'); 
         let remotePlayers = {};
 
-        // --- 2. SETUP SCENE ---
+        // --- 2. SETUP SCENE & FOG ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87CEEB);
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // Tambah kabut biar ujung map halus
+        scene.fog = new THREE.Fog(0x87CEEB, 20, 150); 
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.7));
         const sun = new THREE.DirectionalLight(0xffffff, 1);
-        sun.position.set(5, 10, 5);
+        sun.position.set(50, 100, 50);
+        sun.castShadow = true;
         scene.add(sun);
 
-        const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0x7cfc00 }));
+        // --- 3. LANTAI RAKSASA 2K DENGAN TEKSTUR ---
+        const loader = new THREE.TextureLoader();
+        const grassTexture = loader.load('https://threejs.org/examples/textures/terrain/grasslight-big.jpg');
+        grassTexture.wrapS = grassTexture.wrapT = THREE.RepeatWrapping;
+        grassTexture.repeat.set(100, 100); 
+
+        const floorGeo = new THREE.PlaneGeometry(20000, 20000);
+        const floorMat = new THREE.MeshStandardMaterial({ map: grassTexture });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
         floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
         scene.add(floor);
 
-        // --- 3. FUNGSI KARAKTER ---
+        // Grid tipis
+        const grid = new THREE.GridHelper(2000, 100, 0x000000, 0x000000);
+        grid.material.opacity = 0.1;
+        grid.material.transparent = true;
+        scene.add(grid);
+
+        // --- 4. FUNGSI KARAKTER ---
         function createCharacter(color, name) {
             const group = new THREE.Group();
             const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1.5, 0.6), new THREE.MeshStandardMaterial({ color: color }));
+            body.castShadow = true;
             const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ color: 0xffdbac }));
             head.position.y = 1.1;
             group.add(body, head);
@@ -59,37 +80,41 @@
         player.position.y = 0.75;
         scene.add(player);
 
-        // --- 4. NPC RELAX (LOKAL) ---
+        // --- 5. RINTANGAN (OBSTACLES) ---
+        const boxGeo = new THREE.BoxGeometry(2, 2, 2);
+        const boxMat = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
+        for(let i=0; i<15; i++) {
+            const obstacle = new THREE.Mesh(boxGeo, boxMat);
+            obstacle.position.set(Math.random()*60-30, 1, Math.random()*60-30);
+            obstacle.castShadow = true;
+            scene.add(obstacle);
+        }
+
+        // --- 6. NPC RELAX ---
         const npcs = [];
-        for(let i=0; i<5; i++) {
+        for(let i=0; i<8; i++) {
             const bot = createCharacter(0x666666, "NPC_" + i);
-            bot.position.set(Math.random()*20-10, 0.75, Math.random()*20-10);
-            bot.userData.targetPos = new THREE.Vector3(Math.random()*20-10, 0.75, Math.random()*20-10);
+            bot.position.set(Math.random()*40-20, 0.75, Math.random()*40-20);
+            bot.userData.targetPos = new THREE.Vector3(Math.random()*100-50, 0.75, Math.random()*100-50);
             scene.add(bot);
             npcs.push(bot);
         }
 
-        // --- 5. LOGIKA MULTIPLAYER ---
+        // --- 7. MULTIPLAYER LOGIC ---
         socket.on('currentPlayers', (players) => {
             Object.keys(players).forEach((id) => {
                 if (id !== socket.id) addOtherPlayer(id, players[id]);
             });
         });
-
         socket.on('newPlayer', (info) => addOtherPlayer(info.id, info));
-
         socket.on('playerMoved', (p) => {
             if (remotePlayers[p.id]) {
                 remotePlayers[p.id].position.set(p.x, p.y, p.z);
                 remotePlayers[p.id].rotation.y = p.ry;
             }
         });
-
         socket.on('playerDisconnected', (id) => {
-            if (remotePlayers[id]) {
-                scene.remove(remotePlayers[id]);
-                delete remotePlayers[id];
-            }
+            if (remotePlayers[id]) { scene.remove(remotePlayers[id]); delete remotePlayers[id]; }
         });
 
         function addOtherPlayer(id, info) {
@@ -99,61 +124,40 @@
             remotePlayers[id] = other;
         }
 
-        // --- 6. KONTROL & PVP ---
-        let moveData = { x: 0, y: 0 };
+        // --- 8. KONTROL & ANIMATE ---
+        let moveData = { x: 0, y: 0 }, vY = 0;
         const joystick = nipplejs.create({ zone: document.getElementById('joystick-zone'), mode: 'static', position: {left: '60px', bottom: '60px'}, color: 'white' });
         joystick.on('move', (e, d) => { moveData = { x: d.vector.x, y: d.vector.y }; });
         joystick.on('end', () => { moveData = { x: 0, y: 0 }; });
 
-        let vY = 0;
-        document.getElementById('btn-jump').addEventListener('touchstart', () => { 
-            if(player.position.y <= 0.76) vY = 0.25; 
-        });
-
+        document.getElementById('btn-jump').addEventListener('touchstart', () => { if(player.position.y <= 0.76) vY = 0.25; });
         document.getElementById('btn-attack').addEventListener('touchstart', () => {
-            // Efek visual pukul
             player.children[0].material.color.set(0xffffff);
             setTimeout(() => player.children[0].material.color.set(0x2196F3), 100);
-
-            // Cek siapa yang kena
             Object.keys(remotePlayers).forEach(id => {
-                if(player.position.distanceTo(remotePlayers[id].position) < 2.5) {
-                    socket.emit('attack', id);
-                }
+                if(player.position.distanceTo(remotePlayers[id].position) < 2.5) socket.emit('attack', id);
             });
         });
 
-        // --- 7. ANIMATE LOOP ---
         function animate() {
             requestAnimationFrame(animate);
-
-            // Player Move & Sync
             if(moveData.x || moveData.y) {
                 player.position.x += moveData.x * 0.15;
                 player.position.z -= moveData.y * 0.15;
                 player.rotation.y = Math.atan2(moveData.x, moveData.y);
-                
-                socket.emit('playerMovement', {
-                    x: player.position.x,
-                    z: player.position.z,
-                    ry: player.rotation.y
-                });
+                socket.emit('playerMovement', { x: player.position.x, z: player.position.z, ry: player.rotation.y });
             }
-
-            // Gravity
             player.position.y += vY;
-            if(player.position.y > 0.75) vY -= 0.015;
-            else { player.position.y = 0.75; vY = 0; }
+            if(player.position.y > 0.75) vY -= 0.015; else { player.position.y = 0.75; vY = 0; }
 
-            // NPC Logic (Relax)
             npcs.forEach(bot => {
                 const dist = bot.position.distanceTo(bot.userData.targetPos);
                 if(dist > 0.5) {
                     const dir = bot.userData.targetPos.clone().sub(bot.position).normalize();
-                    bot.position.add(dir.multiplyScalar(0.03));
+                    bot.position.add(dir.multiplyScalar(0.04));
                     bot.lookAt(bot.userData.targetPos);
                 } else {
-                    bot.userData.targetPos.set(Math.random()*40-20, 0.75, Math.random()*40-20);
+                    bot.userData.targetPos.set(Math.random()*200-100, 0.75, Math.random()*200-100);
                 }
             });
 
@@ -161,50 +165,7 @@
             camera.lookAt(player.position);
             renderer.render(scene, camera);
         }
-
         animate();
-
-     // --- 1. LOADER TEKSTUR ---
-const loader = new THREE.TextureLoader();
-// Menggunakan tekstur rumput dari CDN gratis
-const grassTexture = loader.load('https://threejs.org/examples/textures/terrain/grasslight-big.jpg');
-
-// Biar teksturnya gak melar (stretched), kita buat dia berulang (Repeat)
-grassTexture.wrapS = THREE.RepeatWrapping;
-grassTexture.wrapT = THREE.RepeatWrapping;
-grassTexture.repeat.set(100, 100); // Tekstur diulang 100x agar detailnya pas di map 2000
-
-// --- 2. BUAT LANTAI RAKSASA ---
-const floorGeo = new THREE.PlaneGeometry(2000, 2000);
-const floorMat = new THREE.MeshStandardMaterial({ 
-    map: grassTexture, // Memasang gambar rumput
-    roughness: 0.8
-});
-
-const floor = new THREE.Mesh(floorGeo, floorMat);
-floor.rotation.x = -Math.PI / 2; // Tidurkan lantai
-floor.position.y = 0; // Kaki pemain tepat di atas lantai
-floor.receiveShadow = true;
-scene.add(floor);
-
-// --- 3. GRID HELPER (OPSIONAL) ---
-// Ditambah grid tipis biar kerasa jarak geraknya
-const grid = new THREE.GridHelper(2000, 100, 0x000000, 0x000000);
-grid.position.y = 0.05;
-grid.material.opacity = 0.1;
-grid.material.transparent = true;
-scene.add(grid);
-
-     // Tambahkan ini di bawah bagian LANTAI di index.html
-const boxGeo = new THREE.BoxGeometry(2, 2, 2);
-const boxMat = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
-for(let i=0; i<10; i++) {
-    const obstacle = new THREE.Mesh(boxGeo, boxMat);
-    obstacle.position.set(Math.random()*40-20, 1, Math.random()*40-20);
-    scene.add(obstacle);
-}
-
-
 
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
