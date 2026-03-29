@@ -76,7 +76,7 @@
 
         // Ukuran lantai diubah kembali ke 2000 untuk performa HP
         // Map 200000 terlalu ekstrem untuk HP jika diberi tabrakan/bayangan.
-        const floorGeo = new THREE.PlaneGeometry(2000, 2000);
+        const floorGeo = new THREE.PlaneGeometry(10000, 10000);
         const floorMat = new THREE.MeshStandardMaterial({ map: grassTexture });
         const floor = new THREE.Mesh(floorGeo, floorMat);
         floor.rotation.x = -Math.PI / 2;
@@ -138,7 +138,7 @@
         }
 
         // Generate 100 Pohon Acak
-        for(let i=0; i<100; i++) {
+        for(let i=0; i<170; i++) {
             const tree = createTree();
             // Posisi acak di sekitar spawn
             const x = (Math.random() - 0.5) * SPAWN_RANGE * 2;
@@ -153,7 +153,7 @@
         scene.add(treeGroup);
 
         // Fungsi buat Gunung (Kerucut Raksasa)
-        for(let i=0; i<15; i++) {
+        for(let i=0; i<20; i++) {
             const height = 30 + Math.random() * 50; // Tinggi acak 30-80
             const radius = 20 + Math.random() * 30; // Lebar bawah acak 20-50
             
