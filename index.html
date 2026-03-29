@@ -19,11 +19,22 @@
     <div id="joystick-zone"></div>
     <div id="btn-jump" class="btn-ui">JUMP</div>
     <div id="btn-attack" class="btn-ui">👊</div>
-
+    <audio id="bgm" loop>
+    <source src="https://github.com/FAYU-HUB/WebBlox-Alpha/raw/refs/heads/main/DOORS%20Roblox%20OST_%20Elevator%20Jam.mp3" type="audio/mpeg">
+    </audio>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.9.0/nipplejs.min.js"></script>
 
     <script>
+        document.getElementById('bgm');
+        bgm.volume = 0.3; // Set volume 50% biar nggak kekencangan
+        
+        window.addEventListener('touchstart', () => {
+        if (bgm.paused) {
+            bgm.play().catch(e => console.log("Musik diblokir browser, butuh interaksi lagi."));
+        }
+        }, { once: true }); // 'once: true' artinya cuma jalan sekali pas klik pertama
+         
         // --- 1. CONFIG & STATE ---
         // Hubungkan ke server kamu (Ganti localhost jikahosting online)
         const socket = io('http://localhost:7700'); 
